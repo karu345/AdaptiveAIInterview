@@ -49,6 +49,9 @@ function App() {
 
   const [doubtOpen, setDoubtOpen] = useState(false);
   const [doubtText, setDoubtText] = useState("");
+  const [doubtReply, setDoubtReply] = useState("");
+  const [doubtLoading, setDoubtLoading] = useState(false);
+  const [doubtError, setDoubtError] = useState("");
 
   useEffect(() => {
     if (screen !== "interview") return;
@@ -117,6 +120,47 @@ function App() {
   const stopRecording = () => {
     recognition?.stop();
     setRecording(false);
+  };
+
+  const askDoubt = async (event) => {
+    event.preventDefault();
+
+    const doubt = doubtText.trim();
+    if (!doubt || doubtLoading) return;
+
+    setDoubtLoading(true);
+    setDoubtError("");
+    setDoubtReply("");
+    setDoubtText("");
+
+    try {
+      const response = await fetch("http://localhost:5000/api/doubt", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: QUESTIONS[questionIndex].q,
+          doubt,
+          role,
+        }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Unable to get clarification.");
+      }
+
+      setDoubtReply(data.reply);
+    } catch (error) {
+      console.error("Ask doubt error:", error);
+      setDoubtError(
+        "Couldn't get a response. Please check that the backend is running and try again.",
+      );
+    } finally {
+      setDoubtLoading(false);
+    }
   };
 
   return (
@@ -237,38 +281,56 @@ function App() {
 
               <div className="doubt-assistant">
                 <button
+                  type="button"
                   className="btn ghost doubt-toggle"
                   onClick={() => setDoubtOpen((current) => !current)}
                 >
-                  💬 Ask a doubt
+                  💬 {doubtOpen ? "Close doubt assistant" : "Ask a doubt"}
                 </button>
 
                 {doubtOpen && (
                   <div className="doubt-panel">
                     <h4>Question Doubt Assistant</h4>
                     <p>
-                      Confused about the question? Ask for clarification. I can
-                      explain what's being asked, but I won't provide the
-                      answer.
+                      Need help understanding the question? Ask here. I'll
+                      clarify what it means without giving you the answer.
                     </p>
 
-                    <form
-                      className="doubt-form"
-                      onSubmit={(event) => {
-                        event.preventDefault();
-                        // We'll connect this to Gemini in the next step.
-                      }}
-                    >
+                    <form className="doubt-form" onSubmit={askDoubt}>
                       <input
                         type="text"
                         placeholder="Ask about the question..."
                         value={doubtText}
                         onChange={(event) => setDoubtText(event.target.value)}
+                        maxLength={1000}
+                        disabled={doubtLoading}
                       />
-                      <button className="btn primary" type="submit">
-                        Ask
+
+                      <button
+                        className="btn primary"
+                        type="submit"
+                        disabled={doubtLoading || !doubtText.trim()}
+                      >
+                        {doubtLoading ? "Asking..." : "Ask"}
                       </button>
                     </form>
+
+                    {doubtLoading && (
+                      <p className="doubt-status">Getting clarification...</p>
+                    )}
+
+                    {doubtError && (
+                      <p className="doubt-error" role="alert">
+                        {doubtError}
+                      </p>
+                    )}
+
+                    {doubtReply && (
+                      <div className="doubt-reply" aria-live="polite">
+                        <strong>AI clarification</strong>
+                        <p>{doubtReply}</p>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

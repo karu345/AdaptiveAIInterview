@@ -818,3 +818,29 @@
   border-radius: 10px;
   font: inherit;
 }
+
+
+.doubt-status {
+  margin-top: 12px;
+  color: #0b7180;
+}
+
+.doubt-error {
+  margin-top: 12px;
+  color: #c62828;
+}
+
+.doubt-reply {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid #cce5e9;
+  border-radius: 12px;
+  background: #f0fafb;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.doubt-reply p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+}
