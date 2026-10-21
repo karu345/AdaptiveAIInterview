@@ -138,7 +138,7 @@ function App() {
   };
 
   const insertFollowUpQuestion = (followUp, afterIndex) => {
-    if (followUpCount >= 5 || afterIndex >= interviewQuestions.length - 1) {
+    if (afterIndex >= interviewQuestions.length - 1) {
       return false;
     }
 
@@ -428,7 +428,6 @@ function App() {
     const canFollowUp =
       evaluation.followUpRecommended &&
       evaluation.followUpQuestion &&
-      followUpCount < 5 &&
       questionIndex < interviewQuestions.length - 1 &&
       !currentQ?.hasFollowUp;
 
