@@ -1,6 +1,6 @@
 import robotImage from "../assets/roboNav.png";
 
-export default function Navbar() {
+export default function Navbar({ onLogin }) {
   return (
     <header className="navbar">
       <a href="#home" className="navbar-brand">
@@ -14,11 +14,12 @@ export default function Navbar() {
 
       <nav className="navbar-links">
         <a className="active" href="#home">Home</a>
-        <a href="#features">Features</a>
-        <a href="#about">About</a>
       </nav>
 
-      <button className="btn primary navbar-login">
+      <button
+        className="btn primary navbar-login"
+        onClick={onLogin}
+      >
         Login
       </button>
     </header>

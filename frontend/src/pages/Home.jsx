@@ -40,10 +40,6 @@ export default function Home({ onGetStarted }) {
             <button className="btn primary" onClick={onGetStarted}>
               Get started →
             </button>
-
-            <button className="btn ghost">
-              Learn more
-            </button>
           </div>
         </div>
 

@@ -1,6 +1,8 @@
 import Navbar from "./components/Navbar";
 import Home from "./pages/Home";
 import "./App.css";
+import Login from "./pages/Login";
+import Signup from "./pages/SignUp";
 import { ROLES, SKILLS, QUESTIONS } from "./data";
 import { useEffect, useState } from "react";
 import navImage from "./assets/roboNav.png";
@@ -39,8 +41,21 @@ function App() {
   const [role, setRole] = useState("Java Developer");
   const [skills, setSkills] = useState(["DSA", "OOP"]);
 
+  const [interviewQuestions, setInterviewQuestions] = useState(QUESTIONS);
   const [questionIndex, setQuestionIndex] = useState(0);
+  const [questionsLoading, setQuestionsLoading] = useState(false);
+  const [questionsError, setQuestionsError] = useState("");
   const [answers, setAnswers] = useState(Array(QUESTIONS.length).fill(""));
+
+  const [evaluations, setEvaluations] = useState([]);
+
+  const [sessionId, setSessionId] = useState(null);
+
+  const [evaluationLoading, setEvaluationLoading] = useState(false);
+  const [evaluationError, setEvaluationError] = useState("");
+
+  const [followUpCount, setFollowUpCount] = useState(0);
+
   const [seconds, setSeconds] = useState(0);
   const [typing, setTyping] = useState(false);
 
@@ -53,11 +68,60 @@ function App() {
   const [doubtLoading, setDoubtLoading] = useState(false);
   const [doubtError, setDoubtError] = useState("");
 
+  const [autoFinishStarted, setAutoFinishStarted] = useState(false);
+
+  useEffect(() => {
+    if (screen !== "interview" || seconds < 30 * 60 || autoFinishStarted) {
+      return;
+    }
+
+    setAutoFinishStarted(true);
+
+    const completeSession = async () => {
+      try {
+        if (!sessionId) {
+          throw new Error("Interview session not found.");
+        }
+
+        const response = await fetch(
+          `http://localhost:5000/api/sessions/${sessionId}/complete`,
+          { method: "PATCH" },
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(data.error || "Could not complete the interview.");
+        }
+
+        if (recording) {
+          stopRecording();
+        }
+
+        setScreen("feedback");
+      } catch (error) {
+        console.error("Automatic completion error:", error);
+        setEvaluationError(
+          error.message || "Could not complete the interview.",
+        );
+      }
+    };
+
+    completeSession();
+  }, [screen, seconds, autoFinishStarted, sessionId, recording]);
+
   useEffect(() => {
     if (screen !== "interview") return;
 
     const timer = setInterval(() => {
-      setSeconds((current) => current + 1);
+      setSeconds((current) => {
+        if (current >= 30 * 60) {
+          clearInterval(timer);
+          return current;
+        }
+
+        return current + 1;
+      });
     }, 1000);
 
     return () => clearInterval(timer);
@@ -69,6 +133,49 @@ function App() {
         ? current.filter((skill) => skill !== name)
         : [...current, name],
     );
+  };
+
+  const insertFollowUpQuestion = (followUp, afterIndex) => {
+    if (followUpCount >= 5 || interviewQuestions.length >= 10) {
+      return false;
+    }
+
+    const insertAt = afterIndex + 1;
+    const followUpItem = {
+      ...followUp,
+      isFollowUp: true,
+      hasFollowUp: false,
+    };
+
+    setInterviewQuestions((current) => {
+      const updated = [...current];
+      if (updated[afterIndex]) {
+        updated[afterIndex] = { ...updated[afterIndex], hasFollowUp: true };
+      }
+      return [
+        ...updated.slice(0, insertAt),
+        followUpItem,
+        ...updated.slice(insertAt),
+      ];
+    });
+
+    setAnswers((current) => [
+      ...current.slice(0, insertAt),
+      "",
+      ...current.slice(insertAt),
+    ]);
+
+    setEvaluations((current) =>
+      current.map((ev) => {
+        if (ev.questionIndex >= insertAt && ev.questionIndex !== afterIndex) {
+          return { ...ev, questionIndex: ev.questionIndex + 1 };
+        }
+        return ev;
+      }),
+    );
+
+    setFollowUpCount((count) => count + 1);
+    return true;
   };
 
   const startRecording = () => {
@@ -122,6 +229,245 @@ function App() {
     setRecording(false);
   };
 
+  const generateInterviewQuestions = async () => {
+    setQuestionsLoading(true);
+    setQuestionsError("");
+
+    try {
+      const response = await fetch("http://localhost:5000/api/questions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ role, skills }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Could not generate questions.");
+      }
+
+      if (!Array.isArray(data.questions) || data.questions.length !== 5) {
+        throw new Error("The AI returned an invalid question list.");
+      }
+
+      const sessionResponse = await fetch(
+        "http://localhost:5000/api/sessions",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            role,
+            skills,
+            questions: data.questions,
+          }),
+        },
+      );
+
+      const sessionData = await sessionResponse.json();
+
+      if (!sessionResponse.ok) {
+        throw new Error(
+          sessionData.error || "Could not save the interview session.",
+        );
+      }
+
+      setSessionId(sessionData.sessionId);
+
+      setInterviewQuestions(data.questions);
+      setAnswers(Array(data.questions.length).fill(""));
+      setQuestionIndex(0);
+      setEvaluations([]);
+      setEvaluationError("");
+      setFollowUpCount(0);
+      setSeconds(0);
+      setAutoFinishStarted(false);
+      setDoubtOpen(false);
+      setDoubtText("");
+      setDoubtReply("");
+      setDoubtError("");
+      setScreen("interview");
+    } catch (error) {
+      console.error("Question generation error:", error);
+      setQuestionsError(
+        "Couldn't generate interview questions. Please check the backend and try again.",
+      );
+    } finally {
+      setQuestionsLoading(false);
+    }
+  };
+
+  const evaluateAnswer = async () => {
+    const currentQuestion = interviewQuestions[questionIndex];
+    const currentAnswer = answers[questionIndex];
+
+    if (!currentAnswer?.trim()) {
+      setEvaluationError("Please enter or speak an answer before continuing.");
+      return null;
+    }
+
+    setEvaluationLoading(true);
+    setEvaluationError("");
+
+    try {
+      const controller = new AbortController();
+
+      const timeoutId = setTimeout(() => {
+        controller.abort();
+      }, 90000);
+
+      let response;
+
+      try {
+        response = await fetch("http://localhost:5000/api/evaluate", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            question: currentQuestion.q,
+            answer: currentAnswer,
+            role,
+            skill: currentQuestion.tag,
+            level: currentQuestion.level,
+          }),
+          signal: controller.signal,
+        });
+      } finally {
+        clearTimeout(timeoutId);
+      }
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Could not evaluate your answer.");
+      }
+
+      const evaluation = {
+        questionIndex,
+        question: currentQuestion.q,
+        answer: currentAnswer,
+        tag: currentQuestion.tag,
+        level: currentQuestion.level,
+        isFollowUp: !!currentQuestion.isFollowUp,
+        ...data.evaluation,
+      };
+
+      const saveResponse = await fetch(
+        `http://localhost:5000/api/sessions/${sessionId}/answers`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ evaluation }),
+        },
+      );
+
+      const saveData = await saveResponse.json();
+
+      if (!saveResponse.ok) {
+        throw new Error(
+          saveData.error || "Could not save the answer evaluation.",
+        );
+      }
+
+      setEvaluations((current) => {
+        const updated = [...current];
+        const existingIndex = updated.findIndex(
+          (item) => item.questionIndex === questionIndex,
+        );
+
+        if (existingIndex >= 0) {
+          updated[existingIndex] = evaluation;
+        } else {
+          updated.push(evaluation);
+        }
+
+        return updated;
+      });
+
+      return evaluation;
+    } catch (error) {
+      console.error("Answer evaluation error:", error);
+
+      if (error.name === "AbortError") {
+        setEvaluationError(
+          "Evaluation timed out after 90 seconds. Please try again.",
+        );
+      } else {
+        setEvaluationError(
+          error.message || "Couldn't evaluate your answer. Please try again.",
+        );
+      }
+
+      return null;
+    } finally {
+      setEvaluationLoading(false);
+    }
+  };
+
+  const handleProceed = async () => {
+    if (evaluationLoading) return;
+
+    if (recording) {
+      stopRecording();
+    }
+
+    const evaluation = await evaluateAnswer();
+    if (!evaluation) return;
+
+    const currentQ = interviewQuestions[questionIndex];
+    const canFollowUp =
+      evaluation.followUpRecommended &&
+      evaluation.followUpQuestion &&
+      followUpCount < 5 &&
+      interviewQuestions.length < 10 &&
+      !currentQ?.hasFollowUp;
+
+    if (canFollowUp) {
+      const inserted = insertFollowUpQuestion(
+        evaluation.followUpQuestion,
+        questionIndex,
+      );
+      if (inserted) {
+        setQuestionIndex(questionIndex + 1);
+        return;
+      }
+    }
+
+    if (questionIndex < interviewQuestions.length - 1) {
+      setQuestionIndex((current) => current + 1);
+    } else {
+      try {
+        const response = await fetch(
+          `http://localhost:5000/api/sessions/${sessionId}/complete`,
+          {
+            method: "PATCH",
+          },
+        );
+
+        const data = await response.json();
+
+        if (!response.ok) {
+          throw new Error(
+            data.error || "Could not complete the interview session.",
+          );
+        }
+
+        setScreen("feedback");
+      } catch (error) {
+        console.error("Session completion error:", error);
+        setEvaluationError(
+          "Your answers were evaluated, but the session status could not be updated. Please try again.",
+        );
+      }
+    }
+  };
+
   const askDoubt = async (event) => {
     event.preventDefault();
 
@@ -140,7 +486,7 @@ function App() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          question: QUESTIONS[questionIndex].q,
+          question: interviewQuestions[questionIndex].q,
           doubt,
           role,
         }),
@@ -163,16 +509,49 @@ function App() {
     }
   };
 
+  const resetInterview = () => {
+    if (recording) {
+      stopRecording();
+    }
+    setInterviewQuestions(QUESTIONS);
+    setAnswers(Array(QUESTIONS.length).fill(""));
+    setQuestionIndex(0);
+    setEvaluations([]);
+    setEvaluationError("");
+    setFollowUpCount(0);
+    setSeconds(0);
+    setAutoFinishStarted(false);
+    setDoubtOpen(false);
+    setDoubtText("");
+    setDoubtReply("");
+    setDoubtError("");
+    setScreen("skills");
+  };
+
   return (
     <div className="app" id="home">
       {screen === "landing" && (
         <>
-          <Navbar />
+          <Navbar onLogin={() => setScreen("login")} />
 
           <main>
             <Home onGetStarted={() => setScreen("role")} />
           </main>
         </>
+      )}
+
+      {screen === "login" && (
+        <Login
+          onBack={() => setScreen("landing")}
+          onSignup={() => setScreen("signup")}
+        />
+      )}
+
+      {screen === "signup" && (
+        <Signup
+          onBack={() => setScreen("landing")}
+          onLogin={() => setScreen("login")}
+        />
       )}
 
       {screen === "role" && (
@@ -225,11 +604,17 @@ function App() {
 
           <button
             className="btn primary role-next"
-            disabled={skills.length === 0}
-            onClick={() => setScreen("interview")}
+            disabled={skills.length === 0 || questionsLoading}
+            onClick={generateInterviewQuestions}
           >
-            Next →
+            {questionsLoading ? "Generating questions..." : "Next →"}
           </button>
+
+          {questionsError && (
+            <p className="doubt-error" role="alert">
+              {questionsError}
+            </p>
+          )}
         </main>
       )}
 
@@ -242,42 +627,80 @@ function App() {
             </div>
 
             <span className="interview-timer">
-              ⏱ {String(Math.floor(seconds / 60)).padStart(2, "0")}:
-              {String(seconds % 60).padStart(2, "0")}
+              ⏱ {String(Math.floor((30 * 60 - seconds) / 60)).padStart(2, "0")}:
+              {String((30 * 60 - seconds) % 60).padStart(2, "0")}
             </span>
 
-            <button className="btn primary" onClick={() => setScreen("skills")}>
+            <button
+              className="btn primary"
+              onClick={async () => {
+                try {
+                  if (sessionId) {
+                    const response = await fetch(
+                      `http://localhost:5000/api/sessions/${sessionId}/complete`,
+                      { method: "PATCH" },
+                    );
+
+                    const data = await response.json();
+
+                    if (!response.ok) {
+                      throw new Error(
+                        data.error || "Could not complete the interview.",
+                      );
+                    }
+                  }
+
+                  setScreen("skills");
+                } catch (error) {
+                  console.error("Interview completion error:", error);
+                  alert(error.message || "Could not complete the interview.");
+                }
+              }}
+            >
               End interview
             </button>
           </header>
 
           <div className="interview-layout">
             <aside className="question-list">
-              {QUESTIONS.map((question, index) => (
+              {interviewQuestions.map((question, index) => (
                 <button
                   key={index}
                   className={`question-number ${
                     questionIndex === index ? "active" : ""
-                  } ${answers[index].trim() ? "answered" : ""}`}
+                  } ${answers[index]?.trim() ? "answered" : ""} ${
+                    question.isFollowUp ? "is-follow-up-pill" : ""
+                  }`}
                   onClick={() => setQuestionIndex(index)}
+                  title={
+                    question.isFollowUp
+                      ? `Adaptive Follow-up (Q${index + 1})`
+                      : `Question ${index + 1}`
+                  }
                 >
                   Q{index + 1}
+                  {question.isFollowUp ? "✦" : ""}
                 </button>
               ))}
             </aside>
 
             <section className="question-content">
               <h3>
-                Question {questionIndex + 1} of {QUESTIONS.length}
+                Question {questionIndex + 1} of {interviewQuestions.length}
               </h3>
 
               <div className="question-tags">
                 <span>{role}</span>
-                <span>{QUESTIONS[questionIndex].tag}</span>
-                <span>{QUESTIONS[questionIndex].level}</span>
+                <span>{interviewQuestions[questionIndex].tag}</span>
+                <span>{interviewQuestions[questionIndex].level}</span>
+                {interviewQuestions[questionIndex].isFollowUp && (
+                  <span className="followup-badge">✦ Adaptive Follow-up</span>
+                )}
               </div>
 
-              <div className="question-box">{QUESTIONS[questionIndex].q}</div>
+              <div className="question-box">
+                {interviewQuestions[questionIndex].q}
+              </div>
 
               <div className="doubt-assistant">
                 <button
@@ -340,7 +763,7 @@ function App() {
                   <textarea
                     className="answer-input"
                     placeholder="Type your answer here..."
-                    value={answers[questionIndex]}
+                    value={answers[questionIndex] || ""}
                     onChange={(event) => {
                       const updated = [...answers];
                       updated[questionIndex] = event.target.value;
@@ -386,24 +809,296 @@ function App() {
                   ← Previous
                 </button>
 
-                {questionIndex < QUESTIONS.length - 1 ? (
-                  <button
-                    className="btn primary"
-                    onClick={() => setQuestionIndex((current) => current + 1)}
-                  >
-                    Next →
-                  </button>
-                ) : (
-                  <button
-                    className="btn primary"
-                    onClick={() => setScreen("feedback")}
-                  >
-                    Finish interview
-                  </button>
-                )}
+                <button
+                  className="btn ghost"
+                  disabled={evaluationLoading}
+                  onClick={async () => {
+                    if (recording) {
+                      stopRecording();
+                    }
+
+                    setEvaluationError("");
+
+                    if (questionIndex < interviewQuestions.length - 1) {
+                      setQuestionIndex((current) => current + 1);
+                      return;
+                    }
+
+                    try {
+                      if (!sessionId) {
+                        throw new Error("Interview session not found.");
+                      }
+
+                      const response = await fetch(
+                        `http://localhost:5000/api/sessions/${sessionId}/complete`,
+                        { method: "PATCH" },
+                      );
+
+                      const data = await response.json();
+
+                      if (!response.ok) {
+                        throw new Error(
+                          data.error || "Could not complete the interview.",
+                        );
+                      }
+
+                      setScreen("feedback");
+                    } catch (error) {
+                      setEvaluationError(
+                        error.message || "Could not complete the interview.",
+                      );
+                    }
+                  }}
+                >
+                  Skip →
+                </button>
+
+                <button
+                  className="btn primary"
+                  disabled={evaluationLoading}
+                  onClick={handleProceed}
+                >
+                  {evaluationLoading
+                    ? "Evaluating..."
+                    : questionIndex < interviewQuestions.length - 1
+                      ? "Next →"
+                      : "Finish interview"}
+                </button>
               </div>
+
+              {evaluationError && (
+                <p className="doubt-error" role="alert">
+                  {evaluationError}
+                </p>
+              )}
             </section>
           </div>
+        </main>
+      )}
+
+      {screen === "feedback" && (
+        <main className="feedback-page">
+          <header className="feedback-header">
+            <div className="step-logo">
+              <img src={navImage} alt="" />
+              <span>Adaptive AI Interview</span>
+            </div>
+
+            <div className="feedback-header-actions">
+              <span className="interview-timer">
+                ⏱ Total time:{" "}
+                {String(Math.floor(seconds / 60)).padStart(2, "0")}:
+                {String(seconds % 60).padStart(2, "0")}
+              </span>
+              <button className="btn primary" onClick={resetInterview}>
+                Practice again ↻
+              </button>
+            </div>
+          </header>
+
+          <section className="feedback-hero">
+            <h2>Interview Performance Summary</h2>
+            <p>
+              Target Role: <strong>{role}</strong> • Completed:{" "}
+              <strong>{evaluations.length} questions</strong>{" "}
+              {followUpCount > 0 && (
+                <span className="followup-summary-pill">
+                  ({followUpCount} adaptive follow-up
+                  {followUpCount === 1 ? "" : "s"})
+                </span>
+              )}
+            </p>
+          </section>
+
+          {evaluations.length === 0 ? (
+            <div className="empty-feedback">
+              <p>No completed evaluations found for this session.</p>
+              <button className="btn primary" onClick={resetInterview}>
+                Start New Interview
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="scorecard-grid">
+                <div className="score-card main-score">
+                  <span className="score-label">Overall Score</span>
+                  <div className="score-value">
+                    {Math.round(
+                      evaluations.reduce(
+                        (sum, item) => sum + (item.score || 0),
+                        0,
+                      ) / evaluations.length,
+                    )}
+                    <span className="score-max">/100</span>
+                  </div>
+                  <span className="score-badge-text">
+                    {(() => {
+                      const avg = Math.round(
+                        evaluations.reduce(
+                          (sum, item) => sum + (item.score || 0),
+                          0,
+                        ) / evaluations.length,
+                      );
+                      if (avg >= 85) return "Excellent Performance";
+                      if (avg >= 70) return "Strong Understanding";
+                      if (avg >= 50) return "Good Foundation";
+                      return "Needs Practice";
+                    })()}
+                  </span>
+                </div>
+
+                <div className="score-card">
+                  <span className="score-label">Correctness</span>
+                  <div className="score-value">
+                    {Math.round(
+                      evaluations.reduce(
+                        (sum, item) => sum + (item.correctness || 0),
+                        0,
+                      ) / evaluations.length,
+                    )}
+                    <span className="score-max">%</span>
+                  </div>
+                  <span className="score-subtext">Technical accuracy</span>
+                </div>
+
+                <div className="score-card">
+                  <span className="score-label">Relevance</span>
+                  <div className="score-value">
+                    {Math.round(
+                      evaluations.reduce(
+                        (sum, item) => sum + (item.relevance || 0),
+                        0,
+                      ) / evaluations.length,
+                    )}
+                    <span className="score-max">%</span>
+                  </div>
+                  <span className="score-subtext">Alignment to question</span>
+                </div>
+
+                <div className="score-card">
+                  <span className="score-label">Completeness</span>
+                  <div className="score-value">
+                    {Math.round(
+                      evaluations.reduce(
+                        (sum, item) => sum + (item.completeness || 0),
+                        0,
+                      ) / evaluations.length,
+                    )}
+                    <span className="score-max">%</span>
+                  </div>
+                  <span className="score-subtext">Depth & coverage</span>
+                </div>
+              </div>
+
+              <div className="analysis-grid">
+                <div className="analysis-card strengths-card">
+                  <h3>🌟 Key Strengths</h3>
+                  <ul>
+                    {Array.from(
+                      new Set(
+                        evaluations
+                          .flatMap((item) => item.strengths || [])
+                          .filter(Boolean),
+                      ),
+                    ).length > 0 ? (
+                      Array.from(
+                        new Set(
+                          evaluations
+                            .flatMap((item) => item.strengths || [])
+                            .filter(Boolean),
+                        ),
+                      ).map((strength, i) => <li key={i}>{strength}</li>)
+                    ) : (
+                      <li>
+                        Answers demonstrated good effort and communication.
+                      </li>
+                    )}
+                  </ul>
+                </div>
+
+                <div className="analysis-card improvements-card">
+                  <h3>🎯 Areas to Improve</h3>
+                  <ul>
+                    {Array.from(
+                      new Set(
+                        evaluations
+                          .flatMap((item) => item.improvements || [])
+                          .filter(Boolean),
+                      ),
+                    ).length > 0 ? (
+                      Array.from(
+                        new Set(
+                          evaluations
+                            .flatMap((item) => item.improvements || [])
+                            .filter(Boolean),
+                        ),
+                      ).map((improvement, i) => <li key={i}>{improvement}</li>)
+                    ) : (
+                      <li>
+                        Practice deeper architectural and edge-case questions.
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              </div>
+
+              <section className="breakdown-section">
+                <h3>Question-by-Question Review</h3>
+
+                <div className="breakdown-list">
+                  {evaluations.map((item, index) => (
+                    <article key={index} className="breakdown-card">
+                      <div className="breakdown-card-header">
+                        <div className="breakdown-tags">
+                          <span className="breakdown-num">Q{index + 1}</span>
+                          {item.isFollowUp && (
+                            <span className="followup-badge">✦ Follow-up</span>
+                          )}
+                          {item.tag && (
+                            <span className="tag-pill">{item.tag}</span>
+                          )}
+                          {item.level && (
+                            <span className="tag-pill">{item.level}</span>
+                          )}
+                        </div>
+                        <div className="breakdown-score">
+                          Score: <strong>{item.score ?? "N/A"}/100</strong>
+                        </div>
+                      </div>
+
+                      <div className="breakdown-question">
+                        <strong>Question:</strong> {item.question}
+                      </div>
+
+                      <div className="breakdown-answer">
+                        <strong>Your answer:</strong>
+                        <p>{item.answer || "No answer recorded."}</p>
+                      </div>
+
+                      {item.feedback && (
+                        <div className="breakdown-feedback">
+                          <strong>AI Feedback:</strong>
+                          <p>{item.feedback}</p>
+                        </div>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              </section>
+
+              <div className="feedback-footer">
+                <button
+                  className="btn ghost"
+                  onClick={() => setScreen("landing")}
+                >
+                  Return to Home
+                </button>
+                <button className="btn primary" onClick={resetInterview}>
+                  Start New Interview →
+                </button>
+              </div>
+            </>
+          )}
         </main>
       )}
     </div>
