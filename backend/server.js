@@ -18,6 +18,30 @@ if (!apiKey) {
 
 const ai = new GoogleGenAI({ apiKey });
 
+const agentId =
+  process.env.ANTIGRAVITY_AGENT_ID || "antigravity-preview-09-2026";
+
+async function generateWithAntigravity(prompt) {
+  const interaction = await ai.interactions.create({
+    agent: agentId,
+    input: prompt,
+    environment: "remote",
+  });
+
+  const text = interaction.output_text;
+
+  if (typeof text !== "string" || !text.trim()) {
+    throw new Error("Antigravity agent returned no text.");
+  }
+
+  return {
+    text: text
+      .trim()
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/, ""),
+  };
+}
+
 const mongoUri = process.env.MONGODB_URI;
 
 let mongoClient;
@@ -44,13 +68,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function generateQuestionsWithRetry(prompt) {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      return await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-        },
-      });
+      return await generateWithAntigravity(prompt);
     } catch (error) {
       const message = String(error?.message || error);
       const retryable =
@@ -120,10 +138,7 @@ Strict rules:
   answer in their own words.
 `;
 
-    const result = await ai.models.generateContent({
-      model: "gemini-3.8-flash",
-      contents: prompt,
-    });
+    const result = await generateWithAntigravity(prompt);
 
     res.json({
       reply: result.text || "Sorry, I couldn't clarify that. Please try again.",
@@ -155,7 +170,7 @@ app.post("/api/questions", async (req, res) => {
     }
 
     const prompt = `
-Generate exactly 5 technical interview questions for a mock interview.
+Generate exactly 10 technical interview questions for a mock interview.
 
 Selected role: ${role.slice(0, 100)}
 Selected skills: ${skills
@@ -189,7 +204,7 @@ Requirements:
 
     if (
       !Array.isArray(parsed.questions) ||
-      parsed.questions.length !== 5 ||
+      parsed.questions.length !== 10 ||
       !parsed.questions.every(
         (q) =>
           typeof q.q === "string" &&
@@ -214,11 +229,7 @@ Requirements:
 async function generateEvaluationWithRetry(prompt) {
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      return await ai.models.generateContent({
-        model: "gemini-3.8-flash",
-        contents: prompt,
-        config: { responseMimeType: "application/json" },
-      });
+      return await generateWithAntigravity(prompt);
     } catch (error) {
       const message = String(error?.message || error);
 

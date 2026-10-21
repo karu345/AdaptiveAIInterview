@@ -70,6 +70,8 @@ function App() {
 
   const [autoFinishStarted, setAutoFinishStarted] = useState(false);
 
+  const [visibleQuestionCount, setVisibleQuestionCount] = useState(1);
+
   useEffect(() => {
     if (screen !== "interview" || seconds < 30 * 60 || autoFinishStarted) {
       return;
@@ -136,11 +138,12 @@ function App() {
   };
 
   const insertFollowUpQuestion = (followUp, afterIndex) => {
-    if (followUpCount >= 5 || interviewQuestions.length >= 10) {
+    if (followUpCount >= 5 || afterIndex >= interviewQuestions.length - 1) {
       return false;
     }
 
-    const insertAt = afterIndex + 1;
+    const replaceAt = afterIndex + 1;
+
     const followUpItem = {
       ...followUp,
       isFollowUp: true,
@@ -149,29 +152,28 @@ function App() {
 
     setInterviewQuestions((current) => {
       const updated = [...current];
+
       if (updated[afterIndex]) {
-        updated[afterIndex] = { ...updated[afterIndex], hasFollowUp: true };
+        updated[afterIndex] = {
+          ...updated[afterIndex],
+          hasFollowUp: true,
+        };
       }
-      return [
-        ...updated.slice(0, insertAt),
-        followUpItem,
-        ...updated.slice(insertAt),
-      ];
+
+      updated[replaceAt] = followUpItem;
+      return updated;
     });
 
-    setAnswers((current) => [
-      ...current.slice(0, insertAt),
-      "",
-      ...current.slice(insertAt),
-    ]);
+    // Clear the answer belonging to the question being replaced.
+    setAnswers((current) => {
+      const updated = [...current];
+      updated[replaceAt] = "";
+      return updated;
+    });
 
+    // Remove any old evaluation associated with the replaced question.
     setEvaluations((current) =>
-      current.map((ev) => {
-        if (ev.questionIndex >= insertAt && ev.questionIndex !== afterIndex) {
-          return { ...ev, questionIndex: ev.questionIndex + 1 };
-        }
-        return ev;
-      }),
+      current.filter((ev) => ev.questionIndex !== replaceAt),
     );
 
     setFollowUpCount((count) => count + 1);
@@ -248,7 +250,7 @@ function App() {
         throw new Error(data.error || "Could not generate questions.");
       }
 
-      if (!Array.isArray(data.questions) || data.questions.length !== 5) {
+      if (!Array.isArray(data.questions) || data.questions.length !== 10) {
         throw new Error("The AI returned an invalid question list.");
       }
 
@@ -280,6 +282,7 @@ function App() {
       setInterviewQuestions(data.questions);
       setAnswers(Array(data.questions.length).fill(""));
       setQuestionIndex(0);
+      setVisibleQuestionCount(1);
       setEvaluations([]);
       setEvaluationError("");
       setFollowUpCount(0);
@@ -421,11 +424,12 @@ function App() {
     if (!evaluation) return;
 
     const currentQ = interviewQuestions[questionIndex];
+
     const canFollowUp =
       evaluation.followUpRecommended &&
       evaluation.followUpQuestion &&
       followUpCount < 5 &&
-      interviewQuestions.length < 10 &&
+      questionIndex < interviewQuestions.length - 1 &&
       !currentQ?.hasFollowUp;
 
     if (canFollowUp) {
@@ -434,12 +438,14 @@ function App() {
         questionIndex,
       );
       if (inserted) {
+        setVisibleQuestionCount((count) => Math.max(count, questionIndex + 2));
         setQuestionIndex(questionIndex + 1);
         return;
       }
     }
 
     if (questionIndex < interviewQuestions.length - 1) {
+      setVisibleQuestionCount((count) => Math.max(count, questionIndex + 2));
       setQuestionIndex((current) => current + 1);
     } else {
       try {
@@ -516,6 +522,7 @@ function App() {
     setInterviewQuestions(QUESTIONS);
     setAnswers(Array(QUESTIONS.length).fill(""));
     setQuestionIndex(0);
+    setVisibleQuestionCount(1);
     setEvaluations([]);
     setEvaluationError("");
     setFollowUpCount(0);
@@ -663,25 +670,27 @@ function App() {
 
           <div className="interview-layout">
             <aside className="question-list">
-              {interviewQuestions.map((question, index) => (
-                <button
-                  key={index}
-                  className={`question-number ${
-                    questionIndex === index ? "active" : ""
-                  } ${answers[index]?.trim() ? "answered" : ""} ${
-                    question.isFollowUp ? "is-follow-up-pill" : ""
-                  }`}
-                  onClick={() => setQuestionIndex(index)}
-                  title={
-                    question.isFollowUp
-                      ? `Adaptive Follow-up (Q${index + 1})`
-                      : `Question ${index + 1}`
-                  }
-                >
-                  Q{index + 1}
-                  {question.isFollowUp ? "✦" : ""}
-                </button>
-              ))}
+              {interviewQuestions
+                .slice(0, visibleQuestionCount)
+                .map((question, index) => (
+                  <button
+                    key={index}
+                    className={`question-number ${
+                      questionIndex === index ? "active" : ""
+                    } ${answers[index]?.trim() ? "answered" : ""} ${
+                      question.isFollowUp ? "is-follow-up-pill" : ""
+                    }`}
+                    onClick={() => setQuestionIndex(index)}
+                    title={
+                      question.isFollowUp
+                        ? `Adaptive Follow-up (Q${index + 1})`
+                        : `Question ${index + 1}`
+                    }
+                  >
+                    Q{index + 1}
+                    {question.isFollowUp ? "✦" : ""}
+                  </button>
+                ))}
             </aside>
 
             <section className="question-content">
@@ -818,8 +827,13 @@ function App() {
                     }
 
                     setEvaluationError("");
+                    setDoubtOpen(false);
+                    setDoubtReply("");
 
                     if (questionIndex < interviewQuestions.length - 1) {
+                      setVisibleQuestionCount((count) =>
+                        Math.max(count, questionIndex + 2),
+                      );
                       setQuestionIndex((current) => current + 1);
                       return;
                     }
