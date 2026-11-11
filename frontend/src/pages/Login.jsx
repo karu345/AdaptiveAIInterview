@@ -2,13 +2,39 @@ import { useState } from "react";
 import "../App.css";
 import robotImage from "../assets/roboNav.png";
 
-export default function Login({ onBack, onSignup }) {
+export default function Login({ onBack, onSignup, onLogin }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    alert("Login UI is ready! Authentication will be added later.");
+
+    setError("");
+    setLoading(true);
+
+    try {
+      const response = await fetch("http://localhost:5000/api/auth/login", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email, password }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.message || "Login failed");
+      }
+
+      onLogin(data);
+    } catch (err) {
+      setError(err.message || "Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -47,9 +73,9 @@ export default function Login({ onBack, onSignup }) {
             onChange={(e) => setPassword(e.target.value)}
             required
           />
-
-          <button type="submit" className="login-submit">
-            Login
+          {error && <p className="error-message">{error}</p>}
+          <button type="submit" className="login-submit" disabled={loading}>
+            {loading ? "Logging in..." : "Login"}
           </button>
         </form>
 

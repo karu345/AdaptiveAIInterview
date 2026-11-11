@@ -6,8 +6,10 @@ import Signup from "./pages/SignUp";
 import { ROLES, SKILLS, QUESTIONS } from "./data";
 import { useEffect, useState } from "react";
 import navImage from "./assets/roboNav.png";
+import PerformanceHistory from "./pages/PerformanceHistory";
+import PerformanceReport from "./pages/PerformanceReport";
 
-function StepHeader({ step, onBack }) {
+function StepHeader({ step, onBack, currentUser }) {
   const steps = ["Role", "Skills", "Interview"];
 
   return (
@@ -17,7 +19,9 @@ function StepHeader({ step, onBack }) {
           <img src={navImage} alt="Adaptive AI Interview" />
           Adaptive AI Interview
         </div>
-        <span className="step-avatar">K</span>
+        <span className="step-avatar">
+          {currentUser?.name?.charAt(0).toUpperCase() || "U"}
+        </span>
       </header>
 
       <button className="btn ghost step-back" onClick={onBack}>
@@ -38,8 +42,27 @@ function StepHeader({ step, onBack }) {
 
 function App() {
   const [screen, setScreen] = useState("landing");
+  const [selectedReport, setSelectedReport] = useState(null);
   const [role, setRole] = useState("Java Developer");
   const [skills, setSkills] = useState(["DSA", "OOP"]);
+
+  const [authToken, setAuthToken] = useState(
+    () => localStorage.getItem("token") || "",
+  );
+
+  const [currentUser, setCurrentUser] = useState(() => {
+    const savedUser = localStorage.getItem("user");
+    return savedUser ? JSON.parse(savedUser) : null;
+  });
+
+  const handleAuthSuccess = ({ token, user }) => {
+    localStorage.setItem("token", token);
+    localStorage.setItem("user", JSON.stringify(user));
+
+    setAuthToken(token);
+    setCurrentUser(user);
+    setScreen("role");
+  };
 
   const [interviewQuestions, setInterviewQuestions] = useState(QUESTIONS);
   const [questionIndex, setQuestionIndex] = useState(0);
@@ -48,8 +71,6 @@ function App() {
   const [answers, setAnswers] = useState(Array(QUESTIONS.length).fill(""));
 
   const [evaluations, setEvaluations] = useState([]);
-
-  const [sessionId, setSessionId] = useState(null);
 
   const [evaluationLoading, setEvaluationLoading] = useState(false);
   const [evaluationError, setEvaluationError] = useState("");
@@ -69,35 +90,58 @@ function App() {
   const [doubtError, setDoubtError] = useState("");
 
   const [autoFinishStarted, setAutoFinishStarted] = useState(false);
+  const [summarySaving, setSummarySaving] = useState(false);
 
   const [visibleQuestionCount, setVisibleQuestionCount] = useState(1);
 
   useEffect(() => {
-    if (screen !== "interview" || seconds < 30 * 60 || autoFinishStarted) {
+    if (
+      screen !== "interview" ||
+      seconds < 30 * 60 ||
+      autoFinishStarted ||
+      summarySaving
+    ) {
       return;
     }
 
     setAutoFinishStarted(true);
+    setSummarySaving(true);
 
     const completeSession = async () => {
       try {
-        if (!sessionId) {
-          throw new Error("Interview session not found.");
+        if (recording) {
+          stopRecording();
+        }
+
+        if (evaluations.length === 0) {
+          setEvaluationError("No completed answers to save.");
+          return;
         }
 
         const response = await fetch(
-          `http://localhost:5000/api/sessions/${sessionId}/complete`,
-          { method: "PATCH" },
+          "http://localhost:5000/api/performance-summaries",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              role,
+              skills,
+              durationSeconds: seconds,
+              followUpCount,
+              evaluations,
+            }),
+          },
         );
 
         const data = await response.json();
 
         if (!response.ok) {
-          throw new Error(data.error || "Could not complete the interview.");
-        }
-
-        if (recording) {
-          stopRecording();
+          throw new Error(
+            data.error || "Could not save the performance summary.",
+          );
         }
 
         setScreen("feedback");
@@ -106,11 +150,25 @@ function App() {
         setEvaluationError(
           error.message || "Could not complete the interview.",
         );
+        setAutoFinishStarted(false);
+      } finally {
+        setSummarySaving(false);
       }
     };
 
     completeSession();
-  }, [screen, seconds, autoFinishStarted, sessionId, recording]);
+  }, [
+    screen,
+    seconds,
+    autoFinishStarted,
+    summarySaving,
+    recording,
+    evaluations,
+    authToken,
+    role,
+    skills,
+    followUpCount,
+  ]);
 
   useEffect(() => {
     if (screen !== "interview") return;
@@ -240,6 +298,7 @@ function App() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
         },
         body: JSON.stringify({ role, skills }),
       });
@@ -253,31 +312,6 @@ function App() {
       if (!Array.isArray(data.questions) || data.questions.length !== 10) {
         throw new Error("The AI returned an invalid question list.");
       }
-
-      const sessionResponse = await fetch(
-        "http://localhost:5000/api/sessions",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            role,
-            skills,
-            questions: data.questions,
-          }),
-        },
-      );
-
-      const sessionData = await sessionResponse.json();
-
-      if (!sessionResponse.ok) {
-        throw new Error(
-          sessionData.error || "Could not save the interview session.",
-        );
-      }
-
-      setSessionId(sessionData.sessionId);
 
       setInterviewQuestions(data.questions);
       setAnswers(Array(data.questions.length).fill(""));
@@ -300,6 +334,7 @@ function App() {
       );
     } finally {
       setQuestionsLoading(false);
+      setSummarySaving(false);
     }
   };
 
@@ -329,6 +364,7 @@ function App() {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            Authorization: `Bearer ${authToken}`,
           },
           body: JSON.stringify({
             question: currentQuestion.q,
@@ -358,26 +394,6 @@ function App() {
         isFollowUp: !!currentQuestion.isFollowUp,
         ...data.evaluation,
       };
-
-      const saveResponse = await fetch(
-        `http://localhost:5000/api/sessions/${sessionId}/answers`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ evaluation }),
-        },
-      );
-
-      const saveData = await saveResponse.json();
-
-      if (!saveResponse.ok) {
-        throw new Error(
-          saveData.error || "Could not save the answer evaluation.",
-        );
-      }
-
       setEvaluations((current) => {
         const updated = [...current];
         const existingIndex = updated.findIndex(
@@ -414,6 +430,7 @@ function App() {
   };
 
   const handleProceed = async () => {
+    if (summarySaving) return;
     if (evaluationLoading) return;
 
     if (recording) {
@@ -448,10 +465,29 @@ function App() {
       setQuestionIndex((current) => current + 1);
     } else {
       try {
+        setSummarySaving(true);
+        const completedEvaluations = [
+          ...evaluations.filter(
+            (item) => item.questionIndex !== evaluation.questionIndex,
+          ),
+          evaluation,
+        ];
+
         const response = await fetch(
-          `http://localhost:5000/api/sessions/${sessionId}/complete`,
+          "http://localhost:5000/api/performance-summaries",
           {
-            method: "PATCH",
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${authToken}`,
+            },
+            body: JSON.stringify({
+              role,
+              skills,
+              durationSeconds: seconds,
+              followUpCount,
+              evaluations: completedEvaluations,
+            }),
           },
         );
 
@@ -459,16 +495,19 @@ function App() {
 
         if (!response.ok) {
           throw new Error(
-            data.error || "Could not complete the interview session.",
+            data.error || "Could not save the performance summary.",
           );
         }
 
+        setEvaluations(completedEvaluations);
         setScreen("feedback");
       } catch (error) {
-        console.error("Session completion error:", error);
+        console.error("Summary saving error:", error);
         setEvaluationError(
-          "Your answers were evaluated, but the session status could not be updated. Please try again.",
+          error.message || "Could not save the performance summary.",
         );
+      } finally {
+        setSummarySaving(false);
       }
     }
   };
@@ -489,6 +528,7 @@ function App() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          Authorization: `Bearer ${authToken}`,
         },
         body: JSON.stringify({
           question: interviewQuestions[questionIndex].q,
@@ -538,10 +578,23 @@ function App() {
     <div className="app" id="home">
       {screen === "landing" && (
         <>
-          <Navbar onLogin={() => setScreen("login")} />
+          <Navbar
+            onLogin={() => setScreen("login")}
+            currentUser={currentUser}
+            onLogout={() => {
+              localStorage.removeItem("token");
+              localStorage.removeItem("user");
+              setAuthToken(null);
+              setCurrentUser(null);
+              setScreen("landing");
+            }}
+            onHistory={() => setScreen("history")}
+          />
 
           <main>
-            <Home onGetStarted={() => setScreen("role")} />
+            <Home
+              onGetStarted={() => setScreen(authToken ? "role" : "login")}
+            />
           </main>
         </>
       )}
@@ -550,6 +603,7 @@ function App() {
         <Login
           onBack={() => setScreen("landing")}
           onSignup={() => setScreen("signup")}
+          onLogin={handleAuthSuccess}
         />
       )}
 
@@ -557,12 +611,17 @@ function App() {
         <Signup
           onBack={() => setScreen("landing")}
           onLogin={() => setScreen("login")}
+          onSignupSuccess={handleAuthSuccess}
         />
       )}
 
       {screen === "role" && (
         <main className="role-page">
-          <StepHeader step={1} onBack={() => setScreen("landing")} />
+          <StepHeader
+            step={1}
+            onBack={() => setScreen("landing")}
+            currentUser={currentUser}
+          />
 
           <h2>Select your role</h2>
           <p>Choose the role you want to practice for.</p>
@@ -590,7 +649,11 @@ function App() {
 
       {screen === "skills" && (
         <main className="role-page">
-          <StepHeader step={2} onBack={() => setScreen("role")} />
+          <StepHeader
+            step={2}
+            onBack={() => setScreen("role")}
+            currentUser={currentUser}
+          />
 
           <h2>Select your skills</h2>
           <p>Choose the topics you want to be interviewed on.</p>
@@ -639,27 +702,51 @@ function App() {
 
             <button
               className="btn primary"
+              disabled={summarySaving || evaluationLoading}
               onClick={async () => {
+                if (summarySaving || evaluationLoading) return;
                 try {
-                  if (sessionId) {
+                  if (recording) {
+                    stopRecording();
+                  }
+
+                  if (evaluations.length > 0) {
+                    setSummarySaving(true);
                     const response = await fetch(
-                      `http://localhost:5000/api/sessions/${sessionId}/complete`,
-                      { method: "PATCH" },
+                      "http://localhost:5000/api/performance-summaries",
+                      {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/json",
+                          Authorization: `Bearer ${authToken}`,
+                        },
+                        body: JSON.stringify({
+                          role,
+                          skills,
+                          durationSeconds: seconds,
+                          followUpCount,
+                          evaluations,
+                        }),
+                      },
                     );
 
                     const data = await response.json();
 
                     if (!response.ok) {
                       throw new Error(
-                        data.error || "Could not complete the interview.",
+                        data.error || "Could not save the performance summary.",
                       );
                     }
-                  }
 
-                  setScreen("skills");
+                    setScreen("feedback");
+                  } else {
+                    setScreen("skills");
+                  }
                 } catch (error) {
                   console.error("Interview completion error:", error);
                   alert(error.message || "Could not complete the interview.");
+                } finally {
+                  setSummarySaving(false);
                 }
               }}
             >
@@ -819,8 +906,9 @@ function App() {
 
                 <button
                   className="btn ghost"
-                  disabled={evaluationLoading}
+                  disabled={evaluationLoading || summarySaving}
                   onClick={async () => {
+                    if (summarySaving || evaluationLoading) return;
                     if (recording) {
                       stopRecording();
                     }
@@ -838,28 +926,45 @@ function App() {
                     }
 
                     try {
-                      if (!sessionId) {
-                        throw new Error("Interview session not found.");
-                      }
-
-                      const response = await fetch(
-                        `http://localhost:5000/api/sessions/${sessionId}/complete`,
-                        { method: "PATCH" },
-                      );
-
-                      const data = await response.json();
-
-                      if (!response.ok) {
-                        throw new Error(
-                          data.error || "Could not complete the interview.",
+                      if (evaluations.length > 0) {
+                        setSummarySaving(true);
+                        const response = await fetch(
+                          "http://localhost:5000/api/performance-summaries",
+                          {
+                            method: "POST",
+                            headers: {
+                              "Content-Type": "application/json",
+                              Authorization: `Bearer ${authToken}`,
+                            },
+                            body: JSON.stringify({
+                              role,
+                              skills,
+                              durationSeconds: seconds,
+                              followUpCount,
+                              evaluations,
+                            }),
+                          },
                         );
-                      }
 
-                      setScreen("feedback");
+                        const data = await response.json();
+
+                        if (!response.ok) {
+                          throw new Error(
+                            data.error ||
+                              "Could not save the performance summary.",
+                          );
+                        }
+
+                        setScreen("feedback");
+                      } else {
+                        setScreen("skills");
+                      }
                     } catch (error) {
                       setEvaluationError(
                         error.message || "Could not complete the interview.",
                       );
+                    } finally {
+                      setSummarySaving(false);
                     }
                   }}
                 >
@@ -868,7 +973,7 @@ function App() {
 
                 <button
                   className="btn primary"
-                  disabled={evaluationLoading}
+                  disabled={evaluationLoading || summarySaving}
                   onClick={handleProceed}
                 >
                   {evaluationLoading
@@ -1113,6 +1218,22 @@ function App() {
             </>
           )}
         </main>
+      )}
+      {screen === "history" && (
+        <PerformanceHistory
+          authToken={authToken}
+          onBack={() => setScreen("landing")}
+          onViewReport={(report) => {
+            setSelectedReport(report);
+            setScreen("report");
+          }}
+        />
+      )}
+      {screen === "report" && (
+        <PerformanceReport
+          report={selectedReport}
+          onBack={() => setScreen("history")}
+        />
       )}
     </div>
   );

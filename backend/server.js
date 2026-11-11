@@ -3,8 +3,28 @@ import express from "express";
 import cors from "cors";
 import { GoogleGenAI } from "@google/genai";
 import { MongoClient } from "mongodb";
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 
 const app = express();
+const JWT_SECRET = process.env.JWT_SECRET;
+
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  const token = authHeader && authHeader.split(" ")[1];
+
+  if (!token) {
+    return res.status(401).json({ message: "Access denied. Please log in." });
+  }
+
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(403).json({ message: "Invalid or expired token." });
+  }
+};
 
 app.use(cors());
 app.use(express.json());
@@ -82,8 +102,178 @@ async function generateQuestionsWithRetry(prompt) {
     }
   }
 }
+app.post("/api/auth/signup", async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
 
-// Existing health-check route
+    if (!name || !email || !password) {
+      return res.status(400).json({
+        message: "Name, email and password are required.",
+      });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({
+        message: "Password must be at least 8 characters long.",
+      });
+    }
+
+    if (!database) {
+      return res.status(503).json({
+        message: "Database is not connected.",
+      });
+    }
+
+    const users = database.collection("users");
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const existingUser = await users.findOne({
+      email: normalizedEmail,
+    });
+
+    if (existingUser) {
+      return res.status(409).json({
+        message: "An account with this email already exists.",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 12);
+
+    const newUser = {
+      name: name.trim(),
+      email: normalizedEmail,
+      password: hashedPassword,
+      createdAt: new Date(),
+    };
+
+    const result = await users.insertOne(newUser);
+
+    const token = jwt.sign(
+      {
+        userId: result.insertedId.toString(),
+        email: normalizedEmail,
+      },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    return res.status(201).json({
+      message: "Account created successfully.",
+      token,
+      user: {
+        id: result.insertedId.toString(),
+        name: newUser.name,
+        email: newUser.email,
+      },
+    });
+  } catch (error) {
+    console.error("Signup error:", error);
+    return res.status(500).json({
+      message: "Something went wrong during signup.",
+    });
+  }
+});
+
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        message: "Email and password are required.",
+      });
+    }
+
+    if (!database) {
+      return res.status(503).json({
+        message: "Database is not connected.",
+      });
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+    const user = await database.collection("users").findOne({
+      email: normalizedEmail,
+    });
+
+    if (!user) {
+      return res.status(401).json({
+        message: "Invalid email or password.",
+      });
+    }
+
+    const isPasswordValid = await bcrypt.compare(
+      password,
+      user.password
+    );
+
+    if (!isPasswordValid) {
+      return res.status(401).json({
+        message: "Invalid email or password.",
+      });
+    }
+
+    const token = jwt.sign(
+      {
+        userId: user._id.toString(),
+        email: user.email,
+      },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    return res.status(200).json({
+      message: "Login successful.",
+      token,
+      user: {
+        id: user._id.toString(),
+        name: user.name,
+        email: user.email,
+      },
+    });
+  } catch (error) {
+    console.error("Login error:", error);
+    return res.status(500).json({
+      message: "Something went wrong during login.",
+    });
+  }
+});
+
+app.get("/api/auth/me", authenticateToken, async (req, res) => {
+  try {
+    if (!database) {
+      return res.status(503).json({
+        message: "Database is not connected.",
+      });
+    }
+
+    const { ObjectId } = await import("mongodb");
+
+    const user = await database.collection("users").findOne(
+      { _id: new ObjectId(req.user.userId) },
+      { projection: { password: 0 } }
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found.",
+      });
+    }
+
+    return res.status(200).json({
+      user: {
+        id: user._id.toString(),
+        name: user.name,
+        email: user.email,
+      },
+    });
+  } catch (error) {
+    console.error("Auth check error:", error);
+    return res.status(500).json({
+      message: "Could not verify user.",
+    });
+  }
+});
+
 app.get("/", (req, res) => {
   res.json({
     message: "Adaptive AI Interview API is running!",
@@ -91,7 +281,7 @@ app.get("/", (req, res) => {
 });
 
 // Ask a doubt without revealing the interview answer
-app.post("/api/doubt", async (req, res) => {
+app.post("/api/doubt", authenticateToken, async (req, res) => {
   try {
     const { question, doubt, role } = req.body;
 
@@ -153,7 +343,7 @@ Strict rules:
   }
 });
 
-app.post("/api/questions", async (req, res) => {
+app.post("/api/questions", authenticateToken, async (req, res) => {
   try {
     const { role, skills } = req.body;
 
@@ -251,7 +441,7 @@ async function generateEvaluationWithRetry(prompt) {
   }
 }
 
-app.post("/api/evaluate", async (req, res) => {
+app.post("/api/evaluate", authenticateToken, async (req, res) => {
   try {
     const { question, answer, role, skill, level } = req.body;
     console.log("📩 /api/evaluate request received");
@@ -576,6 +766,138 @@ app.patch("/api/sessions/:id/complete", async (req, res) => {
     });
   }
 });
+
+
+// Save a completed interview performance summary
+app.post(
+  "/api/performance-summaries",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      if (!database) {
+        return res.status(503).json({
+          error: "Database is not connected.",
+        });
+      }
+
+      const {
+        role,
+        skills,
+        evaluations,
+        durationSeconds,
+        followUpCount,
+      } = req.body;
+
+      if (
+        typeof role !== "string" ||
+        !role.trim() ||
+        !Array.isArray(evaluations) ||
+        evaluations.length === 0
+      ) {
+        return res.status(400).json({
+          error: "Role and completed evaluations are required.",
+        });
+      }
+
+      const validEvaluations = evaluations.every((item) =>
+        item &&
+        typeof item.question === "string" &&
+        typeof item.answer === "string" &&
+        ["score", "correctness", "relevance", "completeness"].every(
+          (field) =>
+            Number.isInteger(item[field]) &&
+            item[field] >= 0 &&
+            item[field] <= 100
+        ) &&
+        typeof item.feedback === "string" &&
+        Array.isArray(item.strengths) &&
+        Array.isArray(item.improvements)
+      );
+
+      if (!validEvaluations) {
+        return res.status(400).json({
+          error: "One or more evaluations contain invalid data.",
+        });
+      }
+
+      const average = (field) =>
+        Math.round(
+          evaluations.reduce(
+            (sum, item) => sum + item[field],
+            0
+          ) / evaluations.length
+        );
+
+      const summary = {
+        userId: req.user.userId,
+        role: role.trim(),
+        skills: Array.isArray(skills) ? skills : [],
+        totalQuestions: evaluations.length,
+
+        overallScore: average("score"),
+        correctness: average("correctness"),
+        relevance: average("relevance"),
+        completeness: average("completeness"),
+
+        followUpCount: Number.isInteger(followUpCount)
+          ? followUpCount
+          : 0,
+
+        durationSeconds: Number.isFinite(durationSeconds)
+          ? Math.max(0, durationSeconds)
+          : 0,
+
+        questionReviews: evaluations,
+        completedAt: new Date(),
+      };
+
+      const result = await database
+        .collection("performanceSummaries")
+        .insertOne(summary);
+
+      return res.status(201).json({
+        message: "Performance summary saved successfully.",
+        summaryId: result.insertedId.toString(),
+      });
+    } catch (error) {
+      console.error("Performance summary saving error:", error);
+
+      return res.status(500).json({
+        error: "Could not save the performance summary.",
+      });
+    }
+  }
+);
+
+// Retrieve the logged-in user's completed interview summaries
+app.get(
+  "/api/performance-summaries",
+  authenticateToken,
+  async (req, res) => {
+    try {
+      if (!database) {
+        return res.status(503).json({
+          error: "Database is not connected.",
+        });
+      }
+
+      const summaries = await database
+        .collection("performanceSummaries")
+        .find({ userId: req.user.userId })
+        .sort({ completedAt: -1 })
+        .toArray();
+
+      return res.status(200).json({ summaries });
+    } catch (error) {
+      console.error("Performance summary retrieval error:", error);
+
+      return res.status(500).json({
+        error: "Could not retrieve performance summaries.",
+      });
+    }
+  }
+);
+
 
 const PORT = 5000;
 

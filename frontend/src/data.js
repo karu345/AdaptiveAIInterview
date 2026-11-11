@@ -1,11 +1,27 @@
 export const ROLES = [
   ["Java Developer", "☕"],
+  ["Python Developer", "🐍"],
+  ["JavaScript Developer", "🟨"],
   ["Frontend Developer", "⚛"],
+  ["React Developer", "⚛"],
   ["Backend Developer", "⚙"],
+  ["Node.js Developer", "🟢"],
   ["Full Stack Developer", "≋"],
+  ["Software Engineer", "💻"],
   ["Data Analyst", "▥"],
+  ["Data Scientist", "📊"],
   ["ML Engineer", "◎"],
+  ["AI Engineer", "🤖"],
+  ["GenAI Engineer", "✨"],
+  ["DevOps Engineer", "🔧"],
+  ["Cloud Engineer", "☁"],
+  ["Android Developer", "📱"],
+  ["QA Engineer", "🧪"],
+  ["Cybersecurity Analyst", "🔐"],
+  ["Database Administrator", "🗄"],
 ];
+
+
 
 export const SKILLS = [
   ["DSA", "</>"],
@@ -16,7 +32,40 @@ export const SKILLS = [
   ["System Design", "▤"],
   ["Web Development", "◍"],
   ["Aptitude", "▦"],
-  ["Other", "…"],
+
+  ["Java", "☕"],
+  ["Python", "🐍"],
+  ["C", "©"],
+  ["C++", "➕"],
+  ["JavaScript", "🟨"],
+  ["HTML", "🌐"],
+  ["CSS", "🎨"],
+  ["React.js", "⚛"],
+  ["Node.js", "🟢"],
+  ["Express.js", "🚀"],
+  ["MongoDB", "🍃"],
+  ["SQL", "🗃"],
+  ["REST APIs", "🔗"],
+
+  ["Data Structures", "🌳"],
+  ["Algorithms", "🧩"],
+  ["Data Analytics", "📊"],
+  ["Machine Learning", "◎"],
+  ["Deep Learning", "🧠"],
+  ["Artificial Intelligence", "🤖"],
+  ["Generative AI", "✨"],
+  ["Prompt Engineering", "💬"],
+  ["Natural Language Processing", "📝"],
+
+  ["Git & GitHub", "🐙"],
+  ["Linux", "🐧"],
+  ["Docker", "🐳"],
+  ["Kubernetes", "☸"],
+  ["AWS", "☁"],
+  ["Cloud Computing", "🌥"],
+  ["CI/CD", "🔄"],
+  ["Software Testing", "🧪"],
+  ["Agile & Scrum", "📋"],
 ];
 
 export const QUESTIONS = [
